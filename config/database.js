@@ -1,43 +1,37 @@
-// ===========================================
-// 📁 backend/config/database.js
-// ===========================================
 const mysql = require('mysql2/promise');
 require('dotenv').config();
 
-// Configuración de la conexión a Railway
+// Configuración de Railway MySQL usando variables de entorno
 const dbConfig = {
-    host: process.env.DB_HOST || 'trolley.proxy.rlwy.net',
-    port: process.env.DB_PORT || 22836,
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || 'udiRYhhpLDVVLOmZgLqsxOSBdUfmEFaz',
-    database: process.env.DB_NAME || 'railway',
-    // Configuraciones adicionales para Railway
+    host: process.env.DB_HOST,
+    port: process.env.DB_PORT,
+    user: process.env.DB_USER,
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME,
     ssl: {
         rejectUnauthorized: false
-    },
-    connectTimeout: 60000,
-    acquireTimeout: 60000,
-    timeout: 60000
+    }
 };
 
-// Crear pool de conexiones
 const pool = mysql.createPool(dbConfig);
 
-// Función para probar la conexión
-const testConnection = async () => {
+// Wrapper para manejar errores de base de datos
+const safeDbQuery = async (queryFn, fallbackValue = []) => {
     try {
-        const connection = await pool.getConnection();
-        console.log('✅ Conexión exitosa a Railway MySQL');
-        connection.release();
-        return true;
+        return await queryFn();
     } catch (error) {
-        console.error('❌ Error conectando a la base de datos:', error.message);
-        return false;
+        console.error('💥 Database Error:', {
+            message: error.message,
+            code: error.code,
+            errno: error.errno,
+            sql: error.sql
+        });
+        return fallbackValue;
     }
 };
 
 module.exports = {
+    dbConfig,
     pool,
-    testConnection
+    safeDbQuery
 };
-
