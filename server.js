@@ -8,7 +8,6 @@ const corsConfig = require('./config/cors');
 const { loggingMiddleware, errorHandler, notFoundHandler } = require('./middleware/general');
 
 // Importar rutas
-const authRoutes = require('./routes/auth');
 const userRoutes = require('./routes/users');
 const roleRoutes = require('./routes/roles');
 const beehiveRoutes = require('./routes/beehives');
@@ -16,6 +15,7 @@ const nodeRoutes = require('./routes/nodes');
 const nodeTypeRoutes = require('./routes/node-types');
 const dashboardRoutes = require('./routes/dashboard');
 const debugRoutes = require('./routes/debug');
+const diagnosticRoutes = require('./routes/diagnostic');
 const adminRoutes = require('./routes/admin');
 const messageRoutes = require('./routes/messages');
 const stationRoutes = require('./routes/stations');
@@ -74,7 +74,6 @@ app.get('/api/test-connection', async (req, res) => {
 // =============================================
 // REGISTRAR TODAS LAS RUTAS
 // =============================================
-app.use('/api/auth', authRoutes);
 app.use('/api/usuarios', userRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/colmenas', beehiveRoutes);
@@ -82,6 +81,7 @@ app.use('/api/nodos', nodeRoutes);
 app.use('/api/nodo-tipos', nodeTypeRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/debug', debugRoutes);
+app.use('/api/diagnostic', diagnosticRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/mensajes', messageRoutes);
 app.use('/api/nodo-mensajes', messageRoutes);
@@ -152,9 +152,10 @@ const startServer = async () => {
             console.log(`🗄️  Base de datos: Railway MySQL`);
             console.log(`📋 Endpoints disponibles:`);
             console.log(`   ✅ GET  /api/health`);
-            console.log(`   ✅ POST /api/auth/login`);
+            console.log(`   ✅ POST /api/usuarios/login`);
             console.log(`   ✅ GET  /api/usuarios`);
             console.log(`   ✅ GET  /api/colmenas`);
+            console.log(`   ✅ GET  /api/mensajes/recientes`);
             console.log(`   ✅ GET  /api/dashboard/stats`);
             console.log(`   ✅ GET  /api/debug/check-tables`);
         });
