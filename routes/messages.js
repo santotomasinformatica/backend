@@ -4,40 +4,69 @@ const { pool } = require('../config/database');
 const router = express.Router();
 
 // =============================================
-// OBTENER MENSAJES RECIENTES
+// OBTENER MENSAJES RECIENTES - VERSIÓN SIMPLE Y ROBUSTA
 // =============================================
 router.get('/recientes', async (req, res) => {
     let connection;
     try {
-        const hours = parseInt(req.query.hours) || 24;
-        const limit = parseInt(req.query.limit) || 500;
+        const hours = Math.min(parseInt(req.query.hours) || 24, 168); // Máximo 7 días
+        const limit = Math.min(parseInt(req.query.limit) || 500, 2000); // Máximo 2000
         
-        console.log(`📈 Obteniendo datos recientes (últimas ${hours}h, límite ${limit})...`);
+        console.log(`📈 Obteniendo mensajes recientes (últimas ${hours}h, límite ${limit})...`);
         
         connection = await pool.getConnection();
         
+        // ✅ CONSULTA SIMPLE Y DIRECTA
         const query = `
-            SELECT nm.id, nm.nodo_id, nm.topico, nm.payload, nm.fecha
-            FROM nodo_mensaje nm
-            WHERE nm.fecha >= DATE_SUB(NOW(), INTERVAL ? HOUR)
-            ORDER BY nm.fecha ASC
+            SELECT 
+                id, 
+                nodo_id, 
+                topico, 
+                payload, 
+                fecha
+            FROM nodo_mensaje 
+            WHERE fecha >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+            ORDER BY fecha DESC
             LIMIT ?
         `;
         
+        console.log('🔍 Ejecutando consulta...');
         const [rows] = await connection.execute(query, [hours, limit]);
-        console.log('✅ Mensajes obtenidos de BD:', rows.length);
+        console.log(`✅ Registros obtenidos: ${rows.length}`);
         
-        const mensajes = rows.map(mensaje => {
-            let parsedPayload = {};
+        // ✅ PROCESAMIENTO SIMPLE DE DATOS
+        const mensajes = rows.map((mensaje, index) => {
+            let datosExtraidos = {
+                temperatura: null,
+                humedad: null,
+                peso: null,
+                latitud: null,
+                longitud: null
+            };
             
+            // Parsear JSON del payload de forma segura
             try {
-                parsedPayload = JSON.parse(mensaje.payload);
+                if (mensaje.payload) {
+                    let payloadObj;
+                    
+                    if (typeof mensaje.payload === 'string') {
+                        payloadObj = JSON.parse(mensaje.payload);
+                    } else {
+                        payloadObj = mensaje.payload;
+                    }
+                    
+                    // Extraer datos según tu estructura real
+                    datosExtraidos = {
+                        temperatura: payloadObj.temperatura ? parseFloat(payloadObj.temperatura) : null,
+                        humedad: payloadObj.humedad ? parseFloat(payloadObj.humedad) : null,
+                        peso: payloadObj.peso ? parseFloat(payloadObj.peso) : null,
+                        latitud: payloadObj.latitud ? parseFloat(payloadObj.latitud) : null,
+                        longitud: payloadObj.longitud ? parseFloat(payloadObj.longitud) : null
+                    };
+                }
             } catch (parseError) {
-                console.warn('⚠️ Error parsing payload JSON:', parseError.message);
-                parsedPayload = { 
-                    error: 'Invalid JSON',
-                    raw: mensaje.payload 
-                };
+                console.warn(`⚠️ Error parsing mensaje ${mensaje.id}:`, parseError.message);
+                // Continuar con valores null si hay error de parsing
             }
             
             return {
@@ -46,23 +75,112 @@ router.get('/recientes', async (req, res) => {
                 topico: mensaje.topico,
                 payload: mensaje.payload,
                 fecha: mensaje.fecha,
-                temperatura: parsedPayload.temperatura || null,
-                humedad: parsedPayload.humedad || null,
-                peso: parsedPayload.peso || null,
-                latitud: parsedPayload.latitud || null,
-                longitud: parsedPayload.longitud || null
+                fecha_recepcion: mensaje.fecha, // Alias para compatibilidad
+                // Datos extraídos
+                ...datosExtraidos
             };
         });
         
-        console.log('📊 Mensajes procesados para frontend:', mensajes.length);
-        res.json(mensajes);
+        console.log(`📊 Mensajes procesados exitosamente: ${mensajes.length}`);
+        
+        // ✅ RESPUESTA SIMPLE
+        res.json({
+            data: mensajes,
+            total: mensajes.length,
+            hours: hours,
+            limit: limit,
+            message: mensajes.length > 0 ? 'Datos obtenidos correctamente' : `Sin mensajes en las últimas ${hours} horas`,
+            timestamp: new Date().toISOString()
+        });
         
     } catch (error) {
-        console.error('💥 Error en /api/nodo-mensajes/recientes:', error);
+        console.error('💥 ERROR en /api/mensajes/recientes:');
+        console.error('💥 Mensaje:', error.message);
+        console.error('💥 Código:', error.code);
+        console.error('💥 SQL State:', error.sqlState);
+        console.error('💥 Stack:', error.stack);
+        
+        // Respuesta de error clara
         res.status(500).json({ 
-            error: 'Error obteniendo datos recientes',
+            error: 'Error obteniendo mensajes recientes',
             details: error.message,
-            code: error.code || 'UNKNOWN'
+            code: error.code || 'UNKNOWN_ERROR',
+            timestamp: new Date().toISOString(),
+            endpoint: '/api/mensajes/recientes'
+        });
+    } finally {
+        if (connection) {
+            connection.release();
+        }
+    }
+});
+
+// =============================================
+// ENDPOINT DE PRUEBA SIMPLE
+// =============================================
+router.get('/test', async (req, res) => {
+    let connection;
+    try {
+        console.log('🧪 Test simple de conexión y datos...');
+        
+        connection = await pool.getConnection();
+        
+        // Test 1: Conexión básica
+        const [testConnection] = await connection.execute('SELECT NOW() as current_time, DATABASE() as db_name');
+        
+        // Test 2: Verificar tabla
+        const [tableExists] = await connection.execute(`
+            SELECT COUNT(*) as count 
+            FROM information_schema.tables 
+            WHERE table_schema = DATABASE() 
+            AND table_name = 'nodo_mensaje'
+        `);
+        
+        // Test 3: Contar registros totales
+        let totalCount = 0;
+        let recentCount = 0;
+        let sampleData = null;
+        
+        if (tableExists[0].count > 0) {
+            const [total] = await connection.execute('SELECT COUNT(*) as count FROM nodo_mensaje');
+            totalCount = total[0].count;
+            
+            const [recent] = await connection.execute(`
+                SELECT COUNT(*) as count FROM nodo_mensaje 
+                WHERE fecha >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+            `);
+            recentCount = recent[0].count;
+            
+            // Muestra de datos
+            const [sample] = await connection.execute(`
+                SELECT id, nodo_id, topico, 
+                       LEFT(payload, 100) as payload_preview, 
+                       fecha
+                FROM nodo_mensaje 
+                ORDER BY fecha DESC 
+                LIMIT 3
+            `);
+            sampleData = sample;
+        }
+        
+        res.json({
+            success: true,
+            timestamp: testConnection[0].current_time,
+            database: testConnection[0].db_name,
+            table_exists: tableExists[0].count > 0,
+            total_messages: totalCount,
+            recent_messages_24h: recentCount,
+            sample_data: sampleData,
+            message: 'Test completado exitosamente'
+        });
+        
+    } catch (error) {
+        console.error('💥 Error en test:', error);
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            code: error.code,
+            timestamp: new Date().toISOString()
         });
     } finally {
         if (connection) connection.release();
@@ -70,12 +188,76 @@ router.get('/recientes', async (req, res) => {
 });
 
 // =============================================
-// OBTENER MENSAJES SIMPLES (RESPALDO)
+// ENDPOINT PARA OBTENER ÚLTIMOS DATOS DE NODOS ESPECÍFICOS
+// =============================================
+router.get('/nodos-especificos', async (req, res) => {
+    let connection;
+    try {
+        console.log('🎯 Obteniendo datos de nodos específicos...');
+        
+        connection = await pool.getConnection();
+        
+        // Los nodos que mencionaste anteriormente
+        const nodoInterno = 'NODO-BEF8C985-0FF3-4874-935B-40AA8A235FF7';
+        const nodoExterno = 'NODO-B5B3ABC4-E0CE-4662-ACB3-7A631C12394A';
+        
+        const [datosNodos] = await connection.execute(`
+            SELECT 
+                nodo_id,
+                COUNT(*) as total_mensajes,
+                MAX(fecha) as ultimo_mensaje,
+                MIN(fecha) as primer_mensaje
+            FROM nodo_mensaje 
+            WHERE nodo_id IN (?, ?)
+            GROUP BY nodo_id
+        `, [nodoInterno, nodoExterno]);
+        
+        // Obtener últimos 5 mensajes de cada nodo
+        const [ultimosInterno] = await connection.execute(`
+            SELECT id, nodo_id, payload, fecha
+            FROM nodo_mensaje 
+            WHERE nodo_id = ?
+            ORDER BY fecha DESC 
+            LIMIT 5
+        `, [nodoInterno]);
+        
+        const [ultimosExterno] = await connection.execute(`
+            SELECT id, nodo_id, payload, fecha
+            FROM nodo_mensaje 
+            WHERE nodo_id = ?
+            ORDER BY fecha DESC 
+            LIMIT 5
+        `, [nodoExterno]);
+        
+        res.json({
+            nodos_consultados: [nodoInterno, nodoExterno],
+            resumen: datosNodos,
+            ultimos_datos: {
+                interno: ultimosInterno,
+                externo: ultimosExterno
+            },
+            timestamp: new Date().toISOString()
+        });
+        
+    } catch (error) {
+        console.error('💥 Error obteniendo nodos específicos:', error);
+        res.status(500).json({
+            error: 'Error obteniendo datos de nodos específicos',
+            details: error.message,
+            timestamp: new Date().toISOString()
+        });
+    } finally {
+        if (connection) connection.release();
+    }
+});
+
+// =============================================
+// ENDPOINT SIMPLE PARA DATOS RECIENTES SIN FILTROS
 // =============================================
 router.get('/simple', async (req, res) => {
     let connection;
     try {
-        console.log('📊 Obteniendo mensajes (versión simple)...');
+        console.log('📊 Endpoint simple para datos recientes...');
         
         connection = await pool.getConnection();
         
@@ -86,102 +268,21 @@ router.get('/simple', async (req, res) => {
             LIMIT 100
         `);
         
-        const mensajes = rows.map(mensaje => ({
-            id: mensaje.id,
-            nodo_id: mensaje.nodo_id,
-            topico: mensaje.topico,
-            payload: mensaje.payload,
-            fecha: mensaje.fecha
-        }));
+        console.log(`✅ Datos obtenidos (simple): ${rows.length}`);
         
-        console.log('✅ Mensajes obtenidos (simple):', mensajes.length);        
-        res.json(mensajes);
+        res.json({
+            data: rows,
+            total: rows.length,
+            message: 'Datos obtenidos con endpoint simple',
+            timestamp: new Date().toISOString()
+        });
         
     } catch (error) {
         console.error('💥 Error en endpoint simple:', error);
-        res.status(500).json({ 
-            error: 'Error obteniendo mensajes simple',
-            details: error.message 
-        });
-    } finally {
-        if (connection) connection.release();
-    }
-});
-
-// =============================================
-// CREAR MENSAJE DE PRUEBA
-// =============================================
-router.post('/test-message', async (req, res) => {
-    let connection;
-    try {
-        console.log('🧪 Creando mensaje de prueba...');
-        
-        connection = await pool.getConnection();
-        
-        // Verificar que existe al menos un nodo
-        const [existingNodes] = await connection.execute('SELECT id FROM nodo LIMIT 1');
-        
-        let testNodoId;
-        if (existingNodes.length > 0) {
-            testNodoId = existingNodes[0].id;
-        } else {
-            // Crear un nodo de prueba si no existe ninguno
-            testNodoId = `NODO-TEST-${Date.now()}`;
-            
-            // Verificar que existe al menos un tipo de nodo
-            const [existingTypes] = await connection.execute('SELECT tipo FROM nodo_tipo LIMIT 1');
-            
-            let nodoTipo = 'SENSOR';
-            if (existingTypes.length > 0) {
-                nodoTipo = existingTypes[0].tipo;
-            } else {
-                // Crear tipo de nodo si no existe
-                await connection.execute(
-                    'INSERT IGNORE INTO nodo_tipo (tipo, descripcion) VALUES (?, ?)',
-                    ['SENSOR', 'Sensor genérico de pruebas']
-                );
-            }
-            
-            // Crear el nodo de prueba
-            await connection.execute(
-                'INSERT IGNORE INTO nodo (id, descripcion, tipo) VALUES (?, ?, ?)',
-                [testNodoId, 'Nodo de pruebas automático', nodoTipo]
-            );
-        }
-        
-        const testTopico = `SmartBee/nodes/${testNodoId}/data`;
-        const testPayload = {
-            nodo_id: testNodoId,
-            temperatura: (15 + Math.random() * 20).toFixed(1),
-            humedad: (40 + Math.random() * 40).toFixed(1),
-            peso: (-1 + Math.random() * 3).toFixed(2),
-            latitud: (-36.6009157 + (Math.random() - 0.5) * 0.01).toFixed(7),
-            longitud: (-72.1064020 + (Math.random() - 0.5) * 0.01).toFixed(7)
-        };
-        
-        const payloadJson = JSON.stringify(testPayload);
-        
-        const [result] = await connection.execute(`
-            INSERT INTO nodo_mensaje (nodo_id, topico, payload) 
-            VALUES (?, ?, ?)
-        `, [testNodoId, testTopico, payloadJson]);
-        
-        console.log('✅ Mensaje de prueba creado con ID:', result.insertId);
-        
-        res.json({
-            success: true,
-            id: result.insertId,
-            nodo_id: testNodoId,
-            topico: testTopico,
-            payload: testPayload,
-            message: 'Mensaje de prueba creado exitosamente'
-        });
-        
-    } catch (error) {
-        console.error('💥 Error creando mensaje de prueba:', error);
-        res.status(500).json({ 
-            error: 'Error creando mensaje de prueba',
-            details: error.message 
+        res.status(500).json({
+            error: 'Error en endpoint simple',
+            details: error.message,
+            timestamp: new Date().toISOString()
         });
     } finally {
         if (connection) connection.release();
